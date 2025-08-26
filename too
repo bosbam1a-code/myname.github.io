@@ -1,0 +1,282 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { QRCodeCanvas } from "qrcode.react";
+import { Printer, Save, QrCode, Plus, Trash2, Search } from "lucide-react";
+
+// ---- Utils ----
+const uid = () => Math.random().toString(36).slice(2, 10);
+const currency = (n) => (Number(n) || 0).toLocaleString("th-TH", { style: "currency", currency: "THB" });
+
+// ---- Types (for clarity) ----
+/** @typedef {{ id:string, date:string, customer:string, phone:string, note:string, items: Array<{ id:string, name:string, qty:number, price:number }>, total:number }} Receipt */
+
+// ---- Storage Layer (localStorage) ----
+const LS_KEY = "receipts_v1";
+const loadReceipts = () => {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; }
+};
+const saveReceipts = (rows) => localStorage.setItem(LS_KEY, JSON.stringify(rows));
+
+// ---- Printable Receipt Component ----
+const Printable = React.forwardRef(({ receipt }, ref) => {
+  if (!receipt) return null;
+  const { id, date, customer, phone, items, total, note } = receipt;
+  return (
+    <div ref={ref} className="w-[800px] mx-auto bg-white text-black p-6">
+      <div className="text-center mb-4">
+        <h1 className="text-2xl font-bold">ใบเสร็จรับเงิน / Receipt</h1>
+        <p className="text-sm">เลขที่ #{id} • วันที่ {new Date(date).toLocaleString("th-TH")}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <p className="font-semibold">ลูกค้า</p>
+          <p>{customer || "-"}</p>
+        </div>
+        <div className="text-right">
+          <p className="font-semibold">เบอร์โทร</p>
+          <p>{phone || "-"}</p>
+        </div>
+      </div>
+      <table className="w-full text-sm border-t border-b">
+        <thead>
+          <tr className="text-left">
+            <th className="py-2">รายการ</th>
+            <th className="py-2 w-20 text-center">จำนวน</th>
+            <th className="py-2 w-32 text-right">ราคา/หน่วย</th>
+            <th className="py-2 w-32 text-right">รวม</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => (
+            <tr key={it.id} className="border-t">
+              <td className="py-2 pr-2">{it.name}</td>
+              <td className="py-2 text-center">{it.qty}</td>
+              <td className="py-2 text-right">{currency(it.price)}</td>
+              <td className="py-2 text-right">{currency(it.qty * it.price)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="flex justify-end mt-4">
+        <div className="w-64">
+          <div className="flex justify-between text-base">
+            <span className="font-semibold">ยอดรวม</span>
+            <span className="font-bold">{currency(total)}</span>
+          </div>
+        </div>
+      </div>
+      {note && (
+        <div className="mt-4">
+          <p className="font-semibold">หมายเหตุ</p>
+          <p className="whitespace-pre-wrap">{note}</p>
+        </div>
+      )}
+      <div className="mt-6 flex items-center gap-4">
+        <div>
+          <p className="text-sm font-semibold mb-1">QR สำหรับบิลนี้</p>
+          <QRCodeCanvas value={JSON.stringify({ id, total, customer })} size={120} />
+        </div>
+        <div className="text-xs opacity-80">
+          * QR นี้บรรจุข้อมูลเลขที่บิล ยอดรวม และชื่อลูกค้า (JSON)
+        </div>
+      </div>
+      <style>{`@media print{ body{ background:white } #app-toolbar, #app-list { display:none !important } .print-area{ display:block } }`}</style>
+    </div>
+  );
+});
+Printable.displayName = "Printable";
+
+// ---- Main App ----
+export default function App() {
+  const [rows, setRows] = useState(() => loadReceipts());
+  const [search, setSearch] = useState("");
+  const printRef = useRef(null);
+
+  // form state
+  const [customer, setCustomer] = useState("");
+  const [phone, setPhone] = useState("");
+  const [note, setNote] = useState("");
+  const [items, setItems] = useState([{ id: uid(), name: "", qty: 1, price: 0 }]);
+
+  const total = useMemo(() => items.reduce((s, it) => s + (Number(it.qty)||0) * (Number(it.price)||0), 0), [items]);
+
+  useEffect(() => { saveReceipts(rows); }, [rows]);
+
+  const addItem = () => setItems((v) => [...v, { id: uid(), name: "", qty: 1, price: 0 }]);
+  const removeItem = (id) => setItems((v) => v.length>1 ? v.filter((x) => x.id !== id) : v);
+
+  const resetForm = () => {
+    setCustomer(""); setPhone(""); setNote(""); setItems([{ id: uid(), name: "", qty: 1, price: 0 }]);
+  };
+
+  const handleSave = () => {
+    /** @type {Receipt} */
+    const rec = {
+      id: uid(),
+      date: new Date().toISOString(),
+      customer, phone, note,
+      items: items.map((it) => ({ ...it, qty: Number(it.qty)||0, price: Number(it.price)||0 })),
+      total: Number(total)||0,
+    };
+    setRows((v) => [rec, ...v]);
+    resetForm();
+  };
+
+  const filtered = useMemo(() => rows.filter(r => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      r.id.toLowerCase().includes(q) ||
+      (r.customer||"").toLowerCase().includes(q) ||
+      (r.phone||"").toLowerCase().includes(q)
+    );
+  }), [rows, search]);
+
+  const printCurrent = (rec) => {
+    // Render selected receipt to hidden area and trigger print
+    setSelected(rec);
+    setTimeout(() => window.print(), 100);
+  };
+
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      {/* Toolbar */}
+      <div id="app-toolbar" className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">ระบบบันทึกข้อมูล • สร้าง QR • พิมพ์ใบเสร็จ</h1>
+        <div className="flex gap-2">
+          <Button onClick={handleSave} className="gap-2"><Save size={18}/> บันทึก</Button>
+          <Button variant="outline" onClick={() => printCurrent(selected)} className="gap-2"><Printer size={18}/> พิมพ์ใบเสร็จ</Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Form */}
+        <motion.div layout>
+          <Card className="rounded-2xl shadow-md">
+            <CardHeader>
+              <CardTitle>ฟอร์มออกใบเสร็จ</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm">ชื่อลูกค้า</label>
+                  <Input value={customer} onChange={(e)=>setCustomer(e.target.value)} placeholder="เช่น บจก. เอ บี ซี" />
+                </div>
+                <div>
+                  <label className="text-sm">เบอร์โทร</label>
+                  <Input value={phone} onChange={(e)=>setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">รายการสินค้า/บริการ</label>
+                  <Button type="button" variant="secondary" size="sm" onClick={addItem} className="gap-1"><Plus size={16}/> เพิ่มรายการ</Button>
+                </div>
+                <div className="space-y-2">
+                  {items.map((it, idx) => (
+                    <div key={it.id} className="grid grid-cols-12 gap-2 items-center">
+                      <Input className="col-span-6" placeholder={`รายการ #${idx+1}`} value={it.name} onChange={(e)=>{
+                        const v = e.target.value; setItems((arr)=>arr.map(x=>x.id===it.id?{...x, name:v}:x));
+                      }} />
+                      <Input className="col-span-2" type="number" min={0} value={it.qty} onChange={(e)=>{
+                        const v = e.target.value; setItems((arr)=>arr.map(x=>x.id===it.id?{...x, qty:v}:x));
+                      }} placeholder="จำนวน" />
+                      <Input className="col-span-3" type="number" min={0} value={it.price} onChange={(e)=>{
+                        const v = e.target.value; setItems((arr)=>arr.map(x=>x.id===it.id?{...x, price:v}:x));
+                      }} placeholder="ราคา/หน่วย" />
+                      <Button type="button" variant="ghost" className="col-span-1" onClick={()=>removeItem(it.id)} aria-label="ลบรายการ"><Trash2 size={18}/></Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm">หมายเหตุ</label>
+                <Textarea value={note} onChange={(e)=>setNote(e.target.value)} placeholder="เงื่อนไข ชำระเงิน ฯลฯ" />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm opacity-80">
+                  <QrCode size={18}/> QR จะถูกสร้างอัตโนมัติเมื่อพิมพ์ใบเสร็จ
+                </div>
+                <div className="text-lg font-bold">รวมทั้งหมด: {currency(total)}</div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* List */}
+        <motion.div id="app-list" className="lg:col-span-2" layout>
+          <Card className="rounded-2xl shadow-md">
+            <CardHeader className="flex-row items-center justify-between">
+              <CardTitle>รายการใบเสร็จที่บันทึกไว้</CardTitle>
+              <div className="flex items-center gap-2">
+                <Search size={16} className="opacity-70"/>
+                <Input placeholder="ค้นหา: เลขที่บิล / ชื่อลูกค้า / เบอร์" value={search} onChange={(e)=>setSearch(e.target.value)} className="max-w-sm" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left">
+                    <tr>
+                      <th className="py-2">เลขที่</th>
+                      <th className="py-2">วันที่</th>
+                      <th className="py-2">ลูกค้า</th>
+                      <th className="py-2 text-right">ยอดรวม</th>
+                      <th className="py-2 text-right">การจัดการ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((r) => (
+                      <tr key={r.id} className="border-t">
+                        <td className="py-2">{r.id}</td>
+                        <td className="py-2">{new Date(r.date).toLocaleString("th-TH")}</td>
+                        <td className="py-2">{r.customer}</td>
+                        <td className="py-2 text-right">{currency(r.total)}</td>
+                        <td className="py-2 text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" variant="secondary" onClick={()=>setSelected(r)}>ดูตัวอย่าง</Button>
+                            <Button size="sm" onClick={()=>printCurrent(r)} className="gap-1"><Printer size={16}/> พิมพ์</Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {filtered.length===0 && (
+                      <tr><td colSpan={5} className="py-8 text-center opacity-60">ยังไม่มีข้อมูลที่บันทึก</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+
+      {/* Preview & Print Area */}
+      <div className="mt-6">
+        <Card className="rounded-2xl shadow-md">
+          <CardHeader>
+            <CardTitle>ตัวอย่างใบเสร็จ</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {selected ? (
+              <div className="space-y-4">
+                <Printable ref={printRef} receipt={selected} />
+              </div>
+            ) : (
+              <div className="p-8 text-center opacity-60">เลือกบิลจากตารางเพื่อแสดงตัวอย่าง</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
